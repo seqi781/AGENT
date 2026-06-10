@@ -49,3 +49,7 @@ nav:
   - 06 M1 冒烟测试: 06-smoke-test.md
   - 07 tmux 与执行器抽象: 07-tmux-executor.md
   - 08 terminal-bench 接入与首次跑分: 08-bench-integration.md
+  - 09 推理链重构：治思考撞顶: 09-reasoning-chain.md
+  - 10 记忆板：模型自维护的工作记忆: 10-memory-board.md
+  - 11 最后一公里检验与对照实验: 11-final-mile.md
+  - 12 A2A 化改造与登榜: 12-a2a-leaderboard.md

@@ -1,0 +1,13 @@
+# AgentBeats terminal-bench 2.0 排行榜提交配置（拷贝到排行榜仓库 fork 的根目录）
+# 用法见 docs/12-a2a-leaderboard.md。green 的 UUID 是官方模板自带的，不要改。
+
+[green_agent]
+agentbeats_id = "019d76c2-3bb7-7652-b932-76ad868837b0"
+env = {}
+
+[[participants]]
+# 在 agentbeats.dev 注册 purple agent 后,把拿到的 UUID 填进来
+agentbeats_id = ""
+name = "agent"
+# DEEPSEEK_API_KEY 需在 fork 仓库的 Settings → Secrets and variables → Actions 中添加
+env = { DEEPSEEK_API_KEY = "${DEEPSEEK_API_KEY}" }

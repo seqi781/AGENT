@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "一个能跑 terminal-bench 的终端智能体"
 requires-python = ">=3.12"
 dependencies = [
+    "a2a-sdk[http-server]>=0.3.20,<0.4",
     "httpx[socks]>=0.28.1",
     "openai>=1.60",
     "python-dotenv>=1.0",
+    "uvicorn>=0.30",
 ]
 
 [tool.uv]

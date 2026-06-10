@@ -84,15 +84,38 @@ class LocalExecutor(Executor):
         f.write_text(content)
 
 
-class HarborExecutor(Executor):
+class ShellFileMixin:
+    """没有直接文件 API 的远端执行器共用的文件读写实现。
+
+    用 base64 编码走 self.run() 的 shell 通道，避免内容里的
+    引号/换行/二进制字节破坏 shell 命令。HarborExecutor（容器 exec）
+    和 A2A 桥接执行器（adapters/a2a_server.py）都复用这套逻辑。
+    """
+
+    def read_text(self, path: str) -> str:
+        r = self.run(f"base64 {shlex.quote(path)}", timeout=60)
+        if r.exit_code != 0:
+            raise FileNotFoundError(r.stderr.strip() or f"无法读取 {path}")
+        return base64.b64decode(r.stdout).decode(errors="replace")
+
+    def write_text(self, path: str, content: str) -> None:
+        payload = base64.b64encode(content.encode()).decode()
+        q = shlex.quote(path)
+        # dirname 可能为空（纯文件名），加 ./ 兜底
+        r = self.run(
+            f"mkdir -p \"$(dirname {q})\" && printf %s {shlex.quote(payload)} | base64 -d > {q}",
+            timeout=60,
+        )
+        if r.exit_code != 0:
+            raise IOError(r.stderr.strip() or f"无法写入 {path}")
+
+
+class HarborExecutor(ShellFileMixin, Executor):
     """容器执行：把命令转发给 Harbor 的 environment.exec()。
 
     Harbor 的接口是 async 的，而 agent 循环是同步代码、跑在工作线程里
     （adapter 用 asyncio.to_thread 启动）。这里用 run_coroutine_threadsafe
     把协程提交回主事件循环并阻塞等结果，完成 同步世界 → 异步世界 的桥接。
-
-    文件读写没有直接 API，用 base64 编码走 exec 通道，避免内容里的
-    引号/换行/二进制字节破坏 shell 命令。
     """
 
     def __init__(self, environment, loop, workdir: str | None = None):
@@ -113,20 +136,3 @@ class HarborExecutor(Executor):
             future.cancel()
             return ExecOutcome("", _timeout_message(timeout), 124)
         return ExecOutcome(result.stdout or "", result.stderr or "", result.return_code)
-
-    def read_text(self, path: str) -> str:
-        r = self.run(f"base64 {shlex.quote(path)}", timeout=60)
-        if r.exit_code != 0:
-            raise FileNotFoundError(r.stderr.strip() or f"无法读取 {path}")
-        return base64.b64decode(r.stdout).decode(errors="replace")
-
-    def write_text(self, path: str, content: str) -> None:
-        payload = base64.b64encode(content.encode()).decode()
-        q = shlex.quote(path)
-        # dirname 可能为空（纯文件名），加 ./ 兜底
-        r = self.run(
-            f"mkdir -p \"$(dirname {q})\" && printf %s {shlex.quote(payload)} | base64 -d > {q}",
-            timeout=60,
-        )
-        if r.exit_code != 0:
-            raise IOError(r.stderr.strip() or f"无法写入 {path}")
