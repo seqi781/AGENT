@@ -1,0 +1,7 @@
+.env
+.venv/
+runs/
+jobs/
+site/
+__pycache__/
+*.pyc

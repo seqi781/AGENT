@@ -1,0 +1,49 @@
+site_name: terminal-agent 项目文档
+site_description: 一个能跑 terminal-bench 的终端智能体——按开发时间顺序记录的全过程文档
+docs_dir: docs
+# 绑定所有网卡（127.0.0.1 在远程/端口转发环境里外面够不着）
+dev_addr: 0.0.0.0:8000
+# 扁平 .html（每页一个独立 html 文件，不依赖服务器做目录解析），
+# 任何最朴素的静态服务器甚至 file:// 都能稳定打开。
+use_directory_urls: false
+
+theme:
+  name: material
+  language: zh
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+  features:
+    # 不用 navigation.instant：它的 JS 异步加载配中文 URL 容易跳转失败，
+    # 去掉后点击即整页跳转，最稳。
+    - navigation.footer
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - 首页: index.md
+  - 01 总体方案: 01-overview.md
+  - 02 环境与项目骨架: 02-setup.md
+  - 03 LLM 调用层: 03-llm.md
+  - 04 工具系统: 04-tools.md
+  - 05 Agent 核心循环: 05-core-loop.md
+  - 06 M1 冒烟测试: 06-smoke-test.md
