@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -34,9 +35,14 @@ BUDGET_WARNING = (
 )
 
 
+def _fmt_mm_ss(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 60}m{s % 60:02d}s"
+
+
 @dataclass
 class RunResult:
-    status: str          # done / max_turns / budget_exceeded / llm_error / nudge_failed / environment_lost
+    status: str          # done / max_turns / budget_exceeded / llm_error / nudge_failed / environment_lost / wall_clock_expired
     summary: str         # task_done 的总结（若有）
     turns: int
     usage_prompt: int
@@ -64,7 +70,13 @@ class Agent:
 
     def run(self, task: str, run_name: str | None = None) -> RunResult:
         traj = Trajectory(self.config.runs_dir, run_name)
-        traj.log("start", model=self.config.model, task=task, workdir=self.config.workdir)
+        traj.log(
+            "start",
+            model=self.config.model,
+            task=task,
+            workdir=self.config.workdir,
+            task_timeout_sec=self.config.task_timeout_sec,
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
@@ -77,9 +89,39 @@ class Agent:
         # 环境失联检测：连续收到相同的错误输出 → 容器多半已被销毁，立即止损
         last_error_output: str | None = None
         error_streak = 0
+        # 墙钟感知：维护任务起始时刻，每个工具结果末尾告诉模型还剩多少时间
+        started_at = time.monotonic()
+        budget_mm_ss = _fmt_mm_ss(self.config.task_timeout_sec)
+
+        def remaining_sec() -> float:
+            return self.config.task_timeout_sec - (time.monotonic() - started_at)
+
+        def clock_suffix() -> str:
+            r = remaining_sec()
+            if r <= self.config.wall_clock_warn_at_sec:
+                return (
+                    f"\n\n[!! WALL CLOCK URGENT: only {_fmt_mm_ss(r)} remaining of "
+                    f"{budget_mm_ss} budget. STOP new exploration. Clean up workspace, "
+                    f"verify deliverables, call task_done NOW with current best work. "
+                    f"Partial credit beats no credit.]"
+                )
+            return f"\n\n[wall clock: {_fmt_mm_ss(r)} remaining of {budget_mm_ss} budget]"
+
+        def wall_clock_expired() -> bool:
+            return remaining_sec() <= self.config.wall_clock_stop_at_sec
 
         turn = 0
         for turn in range(1, self.config.max_turns + 1):
+            # ---- 墙钟检查（开头查一次,防止前一次 LLM 调用本身耗光时间）----
+            if wall_clock_expired():
+                status = "wall_clock_expired"
+                summary = (
+                    f"主动收摊于 {int(time.monotonic() - started_at)}s/"
+                    f"{int(self.config.task_timeout_sec)}s,避免被 Harbor 强杀"
+                )
+                traj.log("wall_clock_stop", elapsed_sec=int(time.monotonic() - started_at))
+                break
+
             # ---- token 预算检查 ----
             if self.llm.usage.total_tokens > self.config.max_total_tokens:
                 if not budget_warned:
@@ -143,7 +185,7 @@ class Agent:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
-                    "content": result_text,
+                    "content": result_text + clock_suffix(),
                 })
                 traj.log("tool_result", turn=turn, tool=tc["name"],
                          is_error=is_error, output=result_text)

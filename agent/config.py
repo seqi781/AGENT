@@ -52,12 +52,30 @@ class AgentConfig:
     max_total_tokens: int = 1_500_000   # 累计 token（输入+输出）上限
     command_timeout: float = 120.0      # 单条命令默认超时（秒）
 
+    # ---- 墙钟感知（让模型知道还剩多少时间）----
+    # Harbor 把 --agent-timeout 喂给 asyncio.wait_for 后直接强杀,我们感知不到。
+    # 自己维护一个钟,在工具结果尾部告诉模型剩余时间,临到点时主动 task_done。
+    # 默认 1800s(30 分钟),匹配 terminal-bench 多数任务设定;按 trial 由
+    # TerminalAgent(__init__ kwarg) 或环境变量 AGENT_TASK_TIMEOUT_SEC 覆盖。
+    task_timeout_sec: float = 1800.0
+    wall_clock_warn_at_sec: float = 120.0   # 剩多少时开始在结果里加紧急提示
+    wall_clock_stop_at_sec: float = 20.0    # 剩多少时主动退出循环(留给轨迹落盘+收尾)
+
     # ---- 工具输出截断 ----
     tool_output_limit: int = 16_000     # 单个工具结果最大字符数（头尾各留一半）
 
     # ---- 运行目录 ----
     workdir: str = "."                  # agent 执行命令的工作目录
     runs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "runs")
+
+    def __post_init__(self) -> None:
+        # 环境变量覆盖墙钟预算(通过 --agent-kwargs 不便时的逃生口)
+        env_val = os.environ.get("AGENT_TASK_TIMEOUT_SEC")
+        if env_val:
+            try:
+                self.task_timeout_sec = float(env_val)
+            except ValueError:
+                pass  # 非法值就用默认,不为这点事崩
 
     @property
     def api_key(self) -> str:

@@ -35,12 +35,20 @@ class TerminalAgent(BaseAgent):
 
     SUPPORTS_ATIF = False
 
+    def __init__(self, *args, task_timeout_sec: float | None = None, **kwargs) -> None:
+        # 接收 --agent-kwargs task_timeout_sec=NNN,透传到 AgentConfig 让墙钟感知生效。
+        # 建议在跑 harbor 时与 --agent-timeout 一致,例如:
+        #   --agent-timeout 1800 --agent-kwargs task_timeout_sec=1800
+        # 没传就走 AgentConfig 默认或 AGENT_TASK_TIMEOUT_SEC 环境变量。
+        super().__init__(*args, **kwargs)
+        self._task_timeout_sec = float(task_timeout_sec) if task_timeout_sec else None
+
     @staticmethod
     def name() -> str:
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.2.0"  # M2
+        return "0.3.0"  # M3:墙钟感知
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互
@@ -61,6 +69,8 @@ class TerminalAgent(BaseAgent):
         config = AgentConfig()
         if self.model_name:
             config.model = self.model_name
+        if self._task_timeout_sec is not None:
+            config.task_timeout_sec = self._task_timeout_sec
         config.runs_dir = Path(self.logs_dir)  # 轨迹存进 Harbor 的 trial 目录
 
         loop = asyncio.get_running_loop()
