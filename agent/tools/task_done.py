@@ -13,19 +13,34 @@ from .base import Tool, ToolResult
 class TaskDoneTool(Tool):
     name = "task_done"
     description = (
-        "当且仅当任务已经完成并经过验证时调用此工具结束任务。"
-        "调用前应先实际验证结果（如运行测试、检查文件内容），不要凭感觉宣告完成。"
+        "Call this ONLY when every deliverable required by the task is in place AND has been "
+        "verified by re-reading the file or re-running the test. Listing a deliverable you have "
+        "not actually written/verified is a failure — better to keep working than to claim done. "
+        "If the task has no file deliverable (e.g. answer a question), pass an empty list."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "deliverables": {
+                "type": "array",
+                "description": (
+                    "Concrete artifacts required by the task. One entry per artifact. "
+                    "Each entry must name the absolute path and the verification you performed "
+                    "(e.g. 'wrote /app/solution.py; verified by running pytest -q which passed')."
+                ),
+                "items": {"type": "string"},
+            },
             "summary": {
                 "type": "string",
-                "description": "简要总结：做了什么、如何验证的",
+                "description": "One- or two-sentence summary of the approach.",
             },
         },
-        "required": ["summary"],
+        "required": ["deliverables", "summary"],
     }
 
-    def run(self, summary: str) -> ToolResult:
-        return ToolResult(f"任务已标记完成。总结：{summary}", stop=True)
+    def run(self, deliverables: list[str], summary: str) -> ToolResult:
+        bullet = "\n".join(f"  - {d}" for d in deliverables) if deliverables else "  (none)"
+        return ToolResult(
+            f"Task marked done.\nDeliverables:\n{bullet}\nSummary: {summary}",
+            stop=True,
+        )
