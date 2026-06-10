@@ -64,6 +64,20 @@ class AgentConfig:
     # ---- 工具输出截断 ----
     tool_output_limit: int = 16_000     # 单个工具结果最大字符数（头尾各留一半）
 
+    # ---- 记忆板与上下文窗口（M4）----
+    # 记忆板：模型用 update_memory 维护的持久白板,每轮注入上下文末尾。
+    # 历史窗口：只保留最近的对话轮次,更早的滚出上下文——
+    # 重要信息必须上板,这是"没上板的等于没发生"纪律的机械保证。
+    memory_board_limit: int = 8_000       # 板的硬上限(字符,约 2k token),写满必须修剪
+    max_history_chars: int = 150_000      # 近期历史窗口(字符,约 37k token),超出从最老处整轮丢弃
+    # 板过期催更:实测高压任务下模型会停止记板(失败任务 40 轮仅 1 次更新 vs
+    # 正常任务均值 2.8 次),板若连续这么多轮没更新,就在板消息里加一行提醒。
+    board_stale_after_turns: int = 8
+
+    # 思考触顶的连续抢救上限。撞顶≠迷路:每次只浪费一轮 ~75s,
+    # 实证抢救成功率约 2/3,值得多给几次机会(普通"只说话不干活"仍然只提醒一次)。
+    max_cap_rescues: int = 3
+
     # ---- 运行目录 ----
     workdir: str = "."                  # agent 执行命令的工作目录
     runs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "runs")

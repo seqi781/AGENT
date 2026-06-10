@@ -5,3 +5,4 @@ jobs/
 site/
 __pycache__/
 *.pyc
+terminal-bench/

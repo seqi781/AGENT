@@ -27,6 +27,16 @@ class ExecOutcome:
     exit_code: int
 
 
+def _timeout_message(timeout: float) -> str:
+    """超时不只报死刑,还给诊断方向:挂起最常见的两个原因是
+    交互式程序在等键盘输入、以及任务本身就需要更长时间。"""
+    return (
+        f"命令超过 {timeout} 秒未结束，已被强制终止。"
+        "若它在等待键盘输入（交互式程序/确认提示），改用 send_keys + read_screen；"
+        "若它本身就需要更长时间，显式调大 timeout 参数后重跑，或用 nohup 放后台再轮询结果。"
+    )
+
+
 class Executor(ABC):
     @abstractmethod
     def run(self, command: str, timeout: float) -> ExecOutcome:
@@ -62,7 +72,7 @@ class LocalExecutor(Executor):
                 errors="replace",
             )
         except subprocess.TimeoutExpired:
-            return ExecOutcome("", f"命令超过 {timeout} 秒未结束，已被强制终止", 124)
+            return ExecOutcome("", _timeout_message(timeout), 124)
         return ExecOutcome(proc.stdout, proc.stderr, proc.returncode)
 
     def read_text(self, path: str) -> str:
@@ -101,7 +111,7 @@ class HarborExecutor(Executor):
             result = future.result(timeout=timeout + 30)
         except TimeoutError:
             future.cancel()
-            return ExecOutcome("", f"命令超过 {timeout} 秒未结束，已被强制终止", 124)
+            return ExecOutcome("", _timeout_message(timeout), 124)
         return ExecOutcome(result.stdout or "", result.stderr or "", result.return_code)
 
     def read_text(self, path: str) -> str:

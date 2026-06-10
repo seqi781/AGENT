@@ -48,7 +48,7 @@ class TerminalAgent(BaseAgent):
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.3.0"  # M3:墙钟感知
+        return "0.6.1"  # M4:丢弃骨架兜底 + 板过期催更 + 超时诊断 + 步骤验证证据
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互
