@@ -47,3 +47,5 @@ nav:
   - 04 工具系统: 04-tools.md
   - 05 Agent 核心循环: 05-core-loop.md
   - 06 M1 冒烟测试: 06-smoke-test.md
+  - 07 tmux 与执行器抽象: 07-tmux-executor.md
+  - 08 terminal-bench 接入与首次跑分: 08-bench-integration.md
