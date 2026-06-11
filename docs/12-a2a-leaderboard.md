@@ -30,13 +30,13 @@ purple → green   {"kind": "final"}                    ← 任务结束
 
 ## 登榜步骤（剩余部分需要账号操作）
 
-已就绪：A2A 服务器、Docker 镜像（`terminal-agent-purple:0.6.1`）、冒烟验证。剩下的步骤需要浏览器登录和账号凭证：
+已就绪：A2A 服务器、Docker 镜像（`terminal-agent-purple:0.6.2`）、冒烟验证。剩下的步骤需要浏览器登录和账号凭证：
 
 1. **发布镜像**到公开 registry。推荐 ghcr.io：装 `gh` CLI 并登录后
    ```bash
-   docker tag terminal-agent-purple:0.6.1 ghcr.io/seqi781/terminal-agent-purple:0.6.1
+   docker tag terminal-agent-purple:0.6.2 ghcr.io/seqi781/terminal-agent-purple:0.6.2
    gh auth token | docker login ghcr.io -u seqi781 --password-stdin
-   docker push ghcr.io/seqi781/terminal-agent-purple:0.6.1
+   docker push ghcr.io/seqi781/terminal-agent-purple:0.6.2
    ```
    推完后到 GitHub → Packages → 该镜像 → Settings → 把可见性改为 **Public**（AgentBeats 要求公开镜像）。
 2. **注册 purple agent**：浏览器打开 [agentbeats.dev](https://agentbeats.dev)（GitHub 登录）→ Register Agent → 填名称和镜像地址 → 拿到 agent 的 UUID。

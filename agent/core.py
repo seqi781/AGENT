@@ -159,6 +159,16 @@ BUDGET_WARNING = (
     "然后调用 task_done。"
 )
 
+# 轮数预算告急(墙钟之外的另一条命):实测有任务 40 轮耗尽时手里有半成品
+# 答案却一个字没写进交付文件,0 分收场。最后几轮强制切换到"抢救模式"。
+TURNS_WARNING = (
+    "[!! TURN BUDGET URGENT: you have at most 3 turns of action left before this run is "
+    "force-stopped. STOP exploring and debugging. This turn: write your current best answer "
+    "into the required deliverable files, even if incomplete or uncertain — a partial answer "
+    "on disk scores points, an empty file scores zero. Next turn: clean up scratch files and "
+    "call task_done.]"
+)
+
 
 def _fmt_mm_ss(seconds: float) -> str:
     s = max(0, int(seconds))
@@ -215,6 +225,7 @@ class Agent:
         cap_streak = 0
         last_board_turn = 0  # 上次成功 update_memory 的轮号,板过期提醒用
         budget_warned = False
+        turns_warned = False
         status, summary = "max_turns", ""
         # 环境失联检测：连续收到相同的错误输出 → 容器多半已被销毁，立即止损
         last_error_output: str | None = None
@@ -280,6 +291,12 @@ class Agent:
                 )
                 traj.log("wall_clock_stop", elapsed_sec=int(time.monotonic() - started_at))
                 break
+
+            # ---- 轮数预算告急:最后 3 轮强制进入抢救模式(写盘>探索) ----
+            if not turns_warned and self.config.max_turns - turn <= 2:
+                turns_warned = True
+                history.append({"role": "user", "content": TURNS_WARNING})
+                traj.log("turns_warning", turn=turn)
 
             # ---- token 预算检查 ----
             if self.llm.usage.total_tokens > self.config.max_total_tokens:

@@ -1,6 +1,6 @@
 # terminal-agent purple agent 镜像（AgentBeats / terminal-bench 2.0 登榜用）
 #
-# 构建:  docker build -t <dockerhub用户名>/terminal-agent-purple:0.6.1 .
+# 构建:  docker build -t <dockerhub用户名>/terminal-agent-purple:0.6.2 .
 # 运行:  docker run -e DEEPSEEK_API_KEY=... -p 9100:9100 \
 #          <镜像> --host 0.0.0.0 --port 9100 --card-url <对外URL>
 #
