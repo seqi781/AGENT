@@ -122,22 +122,54 @@ class TerminalAgent(BaseAgent):
         path.write_text(format_trajectory_json(traj.to_json_dict()))
 
     def populate_context_post_run(self, context: AgentContext) -> None:
-        """兜底：trial 被取消/超时导致 run() 没走完时，从轨迹文件回填统计。"""
-        if not context.is_empty():
-            return
+        """兜底：trial 被取消/超时导致 run() 没走完时，从轨迹文件回填统计 +
+        生成 ATIF。harbor 在 agent 超时(强杀 run())后仍会调本方法,而 jsonl
+        每轮实时落盘——这是被杀 trial 也能交出 trajectory.json 的唯一保证,
+        对登榜至关重要(通过的 trial 必须附 ATIF)。"""
         import json
 
         files = sorted(Path(self.logs_dir).glob("*.jsonl"))
         if not files:
             return
-        end_event = None
-        for line in files[-1].read_text().splitlines():
-            event = json.loads(line)
-            if event.get("event") == "end":
-                end_event = event
-        if end_event is None:
+
+        # 1) 回填统计（run() 正常返回时 context 已非空,跳过）
+        if context.is_empty():
+            end_event = None
+            for line in files[-1].read_text().splitlines():
+                event = json.loads(line)
+                if event.get("event") == "end":
+                    end_event = event
+            if end_event is not None:
+                context.n_input_tokens = end_event.get("prompt_tokens")
+                context.n_output_tokens = end_event.get("completion_tokens")
+                context.cost_usd = end_event.get("cost_usd")
+                context.metadata = {"status": end_event.get("status"),
+                                    "turns": end_event.get("turns")}
+
+        # 2) 若 trajectory.json 缺失（run() 被强杀,_write_atif 没执行）,从 jsonl 重建
+        traj_path = Path(self.logs_dir) / "trajectory.json"
+        if not traj_path.exists():
+            try:
+                self._write_atif_from_jsonl(files[-1], traj_path)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"从 jsonl 兜底生成 ATIF 失败: {e}")
+
+    def _write_atif_from_jsonl(self, jsonl_path: Path, out_path: Path) -> None:
+        from adapters.atif import build_trajectory, messages_from_jsonl
+        from harbor.utils.trajectory_utils import format_trajectory_json
+
+        system_prompt = (PROJECT_ROOT / "prompts" / "system.md").read_text()
+        messages, summary = messages_from_jsonl(str(jsonl_path), system_prompt)
+        if len(messages) <= 1:  # 只有 system,没实质内容,不写
             return
-        context.n_input_tokens = end_event.get("prompt_tokens")
-        context.n_output_tokens = end_event.get("completion_tokens")
-        context.cost_usd = end_event.get("cost_usd")
-        context.metadata = {"status": end_event.get("status"), "turns": end_event.get("turns")}
+        traj = build_trajectory(
+            agent_name=self.name(),
+            agent_version=self.version(),
+            model=summary.get("model") or "",
+            messages=messages,
+            prompt_tokens=summary.get("prompt_tokens"),
+            completion_tokens=summary.get("completion_tokens"),
+            cost_usd=summary.get("cost_usd"),
+            status=summary.get("status"),
+        )
+        out_path.write_text(format_trajectory_json(traj.to_json_dict()))

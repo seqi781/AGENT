@@ -135,3 +135,71 @@ def build_trajectory(
             total_steps=len(steps),
         ),
     )
+
+
+def messages_from_jsonl(jsonl_path: str, system_prompt: str | None = None) -> tuple[list[dict], dict]:
+    """从实时落盘的 jsonl 轨迹重建 OpenAI 格式消息 + 汇总信息。
+
+    用于 run() 被 harbor 超时强杀、_write_atif 没机会执行时的兜底:
+    jsonl 每个事件都即时 flush,即便进程被杀也在盘上。tool_result 事件没记
+    tool_call_id,但它紧跟对应 assistant 且按轮内顺序排列,故按顺序配对回
+    该 assistant 的 tool_calls[k].id。"""
+    events = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+
+    messages: list[dict] = []
+    summary = {"model": "", "prompt_tokens": None, "completion_tokens": None,
+               "cost_usd": None, "status": None}
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    pending_calls: list[dict] = []  # 当前 assistant 的 tool_calls,等结果回填
+    result_idx = 0
+    task_added = False
+
+    for e in events:
+        ev = e.get("event")
+        if ev == "start":
+            summary["model"] = e.get("model", "")
+            if e.get("task") and not task_added:
+                messages.append({"role": "user", "content": e["task"]})
+                task_added = True
+        elif ev == "assistant":
+            calls = e.get("tool_calls") or []
+            msg = {"role": "assistant", "content": e.get("text") or ""}
+            if calls:
+                msg["tool_calls"] = [
+                    {"id": c.get("id", ""), "type": "function",
+                     "function": {"name": c.get("name", ""),
+                                  "arguments": c.get("arguments", "")}}
+                    for c in calls
+                ]
+            messages.append(msg)
+            pending_calls = calls
+            result_idx = 0
+        elif ev == "tool_result":
+            # 按顺序配对当前 assistant 的第 result_idx 个 tool_call
+            call_id = ""
+            if result_idx < len(pending_calls):
+                call_id = pending_calls[result_idx].get("id", "")
+            result_idx += 1
+            messages.append({"role": "tool", "tool_call_id": call_id,
+                             "content": e.get("output") or ""})
+        elif ev == "nudge":
+            # nudge 文本没存进 jsonl,放个占位 user 步保持对话连贯
+            messages.append({"role": "user", "content": "[reminder issued]"})
+            pending_calls = []
+        elif ev == "end":
+            summary["status"] = e.get("status")
+            summary["prompt_tokens"] = e.get("prompt_tokens")
+            summary["completion_tokens"] = e.get("completion_tokens")
+            summary["cost_usd"] = e.get("cost_usd")
+
+    return messages, summary
