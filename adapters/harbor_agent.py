@@ -27,7 +27,6 @@ from harbor.models.agent.context import AgentContext
 from agent.config import PROJECT_ROOT, AgentConfig
 from agent.core import Agent
 from agent.executor import HarborExecutor
-from agent.tools import default_toolset
 
 
 class TerminalAgent(BaseAgent):
@@ -151,11 +150,9 @@ class TerminalAgent(BaseAgent):
         executor = HarborExecutor(environment, loop)
         system_prompt = (PROJECT_ROOT / "prompts" / "system.md").read_text()
 
-        agent = Agent(
-            config,
-            system_prompt,
-            tools=default_toolset(config, executor),
-        )
+        # 传 executor(而非预建 tools):Agent 内部用同一个 executor 建工具集,
+        # 同时把它留给状态账本(P0b)。结果与原来等价,只是账本能拿到容器执行器。
+        agent = Agent(config, system_prompt, executor=executor)
 
         # 同步循环进工作线程；它内部的容器命令会桥回本事件循环
         result = await asyncio.to_thread(agent.run, instruction, "harbor")

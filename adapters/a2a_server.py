@@ -41,7 +41,6 @@ from a2a.utils import get_message_text, new_agent_text_message
 from agent.config import PROJECT_ROOT, AgentConfig
 from agent.core import Agent
 from agent.executor import ExecOutcome, Executor, ShellFileMixin
-from agent.tools import default_toolset
 
 logger = logging.getLogger("a2a_server")
 
@@ -99,9 +98,8 @@ class TaskSession:
             if model:
                 config.model = model
             system_prompt = (PROJECT_ROOT / "prompts" / "system.md").read_text()
-            agent = Agent(
-                config, system_prompt, tools=default_toolset(config, self.bridge)
-            )
+            # 传 executor(桥),Agent 内部建工具集 + 留给状态账本(P0b)
+            agent = Agent(config, system_prompt, executor=self.bridge)
             result = agent.run(instruction, "a2a")
             final = {
                 "kind": "final",

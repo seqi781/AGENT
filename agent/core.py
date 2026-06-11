@@ -28,6 +28,7 @@ from typing import Any, Callable
 from .config import AgentConfig
 from .executor import Executor, LocalExecutor
 from .llm import LLMError, OpenAICompatProvider
+from .state_ledger import StateLedger
 from .tools import Tool, default_toolset
 from .trajectory import Trajectory
 
@@ -218,6 +219,7 @@ class Agent:
         self.config = config
         self.system_prompt = system_prompt
         executor = executor or LocalExecutor(config.workdir)
+        self.executor = executor  # 留给状态账本(P0b)用,与工具用的是同一个
         self.tools = tools or default_toolset(config, executor)
         self.tool_map = {t.name: t for t in self.tools}
         self.llm = OpenAICompatProvider(config)
@@ -242,6 +244,12 @@ class Agent:
         history: list[dict[str, Any]] = []
         memory_tool = self.tool_map.get("update_memory")
         tool_specs = [t.spec() for t in self.tools]
+        # 状态账本(P0b):启动快照 + 逐命令文件系统差分,机械捕获副作用。
+        # 失败自禁用,绝不拖垮 agent。和记忆板分开:板主观可丢,账本客观不丢。
+        ledger = StateLedger(self.executor)
+        ledger.init()
+        traj.log("ledger_init", enabled=ledger.enabled, root=ledger.root,
+                 orig_files=len(ledger.orig))
         nudged = False
         cap_streak = 0
         # E1: 撞顶后下一次调用关闭思考——上下文里信息都在,关推理逼模型直接把
@@ -302,9 +310,16 @@ class Agent:
                 ),
             }
 
+        def ledger_message() -> dict[str, Any] | None:
+            """环境状态账本消息(harness 客观记录)。放在板之前:板和墙钟是
+            每轮可能变的、排在最末最易失缓存;账本只在环境变动时变。无内容则不注入。"""
+            text = ledger.render()
+            return {"role": "user", "content": text} if text else None
+
         def build_context() -> list[dict[str, Any]]:
             window = _windowed_history(history, self.config.max_history_chars)
-            return fixed + window + [board_message()]
+            tail = [m for m in (ledger_message(), board_message()) if m]
+            return fixed + window + tail
 
         turn = 0
         for turn in range(1, self.config.max_turns + 1):
@@ -449,6 +464,15 @@ class Agent:
                 })
                 traj.log("tool_result", turn=turn, tool=tc["name"],
                          is_error=is_error, output=result_text)
+                # P0b 状态账本:改动型工具执行后,机械差分工作区捕获副作用
+                # (即便 exit 0/看似无害也照量——db-wal 那条删 WAL 的就是 exit 0)。
+                if tc["name"] in ("run_command", "write_file", "edit_file", "send_keys"):
+                    try:
+                        a = json.loads(tc["arguments"]) if tc["arguments"].strip() else {}
+                    except Exception:
+                        a = {}
+                    label = a.get("command") or f"{tc['name']} {a.get('path', '')}".strip()
+                    ledger.observe(turn, label)
                 if tc["name"] == "update_memory" and not is_error and memory_tool:
                     last_board_turn = turn
                     traj.log("memory_update", turn=turn, board=memory_tool.board)
