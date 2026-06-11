@@ -1,0 +1,46 @@
+// AgentBeats amber manifest：声明 purple agent 怎么被平台拉起。
+// 注册时把本文件的 raw URL 填进 "Amber Manifest URL"：
+//   https://raw.githubusercontent.com/seqi781/AGENT/main/amber-manifest.json5
+{
+  manifest_version: "0.3.0",
+  experimental_features: ["docker"],
+
+  config_schema: {
+    type: "object",
+    properties: {
+      deepseek_api_key: { type: "string", secret: true },
+      // 可选：覆盖默认模型(deepseek-v4-flash)
+      agent_model: { type: "string" },
+    },
+    required: ["deepseek_api_key"],
+    additionalProperties: false,
+  },
+
+  program: {
+    image: "ghcr.io/seqi781/terminal-agent-purple:0.6.2",
+    entrypoint: "python adapters/a2a_server.py --host 0.0.0.0 --port 9100",
+
+    env: {
+      PYTHONUNBUFFERED: "1",
+      DEEPSEEK_API_KEY: "${config.deepseek_api_key}",
+      AGENT_MODEL: {
+        when: "config.agent_model",
+        value: "${config.agent_model}",
+      },
+    },
+
+    network: {
+      endpoints: [
+        { name: "a2a", port: 9100 },
+      ],
+    },
+  },
+
+  provides: {
+    a2a: { kind: "a2a", endpoint: "a2a" },
+  },
+
+  exports: {
+    a2a: "a2a",
+  },
+}
