@@ -50,7 +50,63 @@ class TerminalAgent(BaseAgent):
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.6.7"  # 优化型任务协议:复刻阅卷尺/最优版即时落盘/过线必须留余量/变体台账
+        return "0.7.0"  # 机械状态捕获:超时真值/启动快照+state-diff账本/task_done校验
+
+    def _discover_task_timeout(self) -> float | None:
+        """读取本题真实的 agent 超时(秒),机械地从 harbor 任务缓存解析。
+
+        harbor 把任务定义缓存在 ~/.cache/harbor/tasks/<hash>/<task>/task.toml 的
+        [agent].timeout_sec;有效超时 = (override or base) * multiplier,上限 max。
+        - 任务名从 logs_dir(=.../<task>__<id>/agent)推出。
+        - multiplier / override / max 从同级 trial config.json 读(harbor 必写)。
+        - base 从缓存的 task.toml 读;多个缓存版本若 base 不一致则判为歧义→返回 None。
+        取不到/歧义返回 None,由调用方 loud 退回默认。注:这是读 harbor 私有缓存布局,
+        脆——正式提交靠 preflight_timeouts.py 预检兜底,而非依赖此处万无一失。
+        """
+        try:
+            import json
+            import tomllib
+
+            trial_dir = Path(self.logs_dir).parent       # .../<task>__<id>
+            task_name = trial_dir.name.rsplit("__", 1)[0]  # <task>
+            cache = Path.home() / ".cache" / "harbor" / "tasks"
+            # 缓存有两种布局:单跑 tasks/<hash>/<task>/task.toml、数据集
+            # tasks/packages/<org>/<task>/<hash>/task.toml。按"任务名是路径中一段"
+            # 匹配,两种都覆盖。
+            hits = [p for p in cache.rglob("task.toml") if task_name in p.parts]
+            # 消歧:packages/<org>/<task>/ 是 -d 数据集的权威版本,优先它;
+            # tasks/<hash>/<task>/ 是单跑残留,可能是旧版本。有 packages 命中就只认它。
+            pkg = [p for p in hits if "packages" in p.parts]
+            if pkg:
+                hits = pkg
+            bases = set()
+            for h in hits:
+                data = tomllib.loads(h.read_text())
+                b = data.get("agent", {}).get("timeout_sec")
+                if b is not None:
+                    bases.add(float(b))
+            if len(bases) != 1:
+                # 0 个=没找到;>1 个=版本间不一致,歧义,宁可 loud 退默认
+                if len(bases) > 1:
+                    self.logger.warning(f"[墙钟] {task_name} 多个缓存超时不一致 {bases}")
+                return None
+            base = bases.pop()
+
+            mult, override, max_sec = 1.0, None, None
+            cfg_path = trial_dir / "config.json"
+            if cfg_path.exists():
+                c = json.loads(cfg_path.read_text())
+                agent_cfg = c.get("agent", {}) or {}
+                override = agent_cfg.get("override_timeout_sec")
+                max_sec = agent_cfg.get("max_timeout_sec")
+                mult = c.get("agent_timeout_multiplier") or c.get("timeout_multiplier") or 1.0
+            eff = float(override or base) * float(mult)
+            if max_sec:
+                eff = min(eff, float(max_sec))
+            return eff
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"[墙钟] 解析真实超时异常,退回默认: {e}")
+            return None
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互
@@ -71,8 +127,24 @@ class TerminalAgent(BaseAgent):
         config = AgentConfig()
         if self.model_name:
             config.model = self.model_name
+        # 墙钟对齐(P0a):整套优雅收尾机器(wall_clock_warn/stop、salvage、no_think)
+        # 都建立在 task_timeout_sec 是【真值】之上。harbor 只把每题真实超时传给内置
+        # ORACLE,不传自定义 agent;喂假值(1800 默认)会导致 harbor 在收尾逻辑触发前
+        # 硬杀,我们永远拿不到 task_done、只拿到尸体。优先级:构造时显式 > 缓存读取 >
+        # 默认。不匹配代价不对称(偏高被杀=0 分 / 偏低早停=尚可),故读不到时 loud。
         if self._task_timeout_sec is not None:
             config.task_timeout_sec = self._task_timeout_sec
+        else:
+            discovered = self._discover_task_timeout()
+            if discovered is not None:
+                config.task_timeout_sec = discovered
+                self.logger.info(f"[墙钟] 读到本题真实 agent 超时 = {discovered}s")
+            else:
+                self.logger.warning(
+                    f"[墙钟] 未能读到本题真实超时,退回默认 {config.task_timeout_sec}s。"
+                    "若 harbor 实际超时更短,收尾逻辑可能来不及触发就被强杀。"
+                    "跑 -k5 正式提交前请先跑 preflight_timeouts.py 全量校验。"
+                )
         config.runs_dir = Path(self.logs_dir)  # 轨迹存进 Harbor 的 trial 目录
 
         loop = asyncio.get_running_loop()
