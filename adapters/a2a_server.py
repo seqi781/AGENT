@@ -217,7 +217,7 @@ def main() -> None:
             "outside-in final verification."
         ),
         url=args.card_url or f"http://{args.host}:{args.port}/",
-        version="0.6.3",
+        version="0.6.4",
         default_input_modes=["text"],
         default_output_modes=["text"],
         capabilities=AgentCapabilities(streaming=True),

@@ -50,7 +50,7 @@ class TerminalAgent(BaseAgent):
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.6.3"  # ATIF 轨迹 + 轮数抢救 + 指定工具优先
+        return "0.6.4"  # 尽早落交付文件(治狂写草稿不交付)
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互
