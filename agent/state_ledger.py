@@ -27,8 +27,9 @@ from dataclasses import dataclass, field
 _MAX_FILES = 5_000
 # 注入上下文时最多展示多少条近期变更(danger 不受此限,全部保留)。
 _RECENT_EVENTS = 12
-# 容器内放原始底片的位置:在工作区之外,不会被 find 扫到、不影响判分(判分看 /app)。
-_SNAPSHOT_DIR = "/tmp/_agent_orig_snapshot"
+# 原始底片放在【工作区同级】(如 /app → /app.orig_snap):硬链接/reflink 都只能
+# 同一文件系统内做,放 /tmp 可能跨 fs(tmpfs)而失败;同级保证同 fs。在工作区之外,
+# 不会被 find 扫到、不影响判分(判分看工作区本身)。
 
 
 @dataclass
@@ -41,9 +42,10 @@ class _Event:
 
 
 class StateLedger:
-    def __init__(self, executor, snapshot_dir: str = _SNAPSHOT_DIR):
+    def __init__(self, executor, snapshot_dir: str | None = None):
         self.executor = executor
-        self.snapshot_dir = snapshot_dir
+        self.snapshot_dir = snapshot_dir  # None=启动时按工作区同级推导
+        self.snapshot_ok = False          # 快照是否真的建成(决定能否承诺恢复)
         self.enabled = False
         self.root: str | None = None
         self.orig: dict[str, tuple[str, str]] = {}     # 启动时的原始输入(rel -> (size,mtime))
@@ -58,17 +60,23 @@ class StateLedger:
             r = self.executor.run("pwd", timeout=10)
             root = (r.stdout or "").strip() or "."
             self.root = root
+            if self.snapshot_dir is None:
+                self.snapshot_dir = root.rstrip("/") + ".orig_snap"  # 同级,保证同 fs
             manifest = self._manifest()
             if manifest is None:
                 return  # 太大或失败 → 不启用
             # 原始底片:优先 reflink(COW,连原地改写都防),否则硬链接(防删除/替换)。
-            # 都是近零成本(只复制元数据,不复制数据本体)。best-effort,失败不致命。
-            self.executor.run(
-                f"rm -rf {self.snapshot_dir} 2>/dev/null; "
-                f"cp --reflink=auto -a {root} {self.snapshot_dir} 2>/dev/null || "
-                f"cp -al {root} {self.snapshot_dir} 2>/dev/null || true",
+            # 都是近零成本(只复制元数据,不复制数据本体)。best-effort,失败不致命:
+            # 失败则只剩检测、没有恢复(render 据 snapshot_ok 决定是否承诺恢复)。
+            snap = self.snapshot_dir
+            chk = self.executor.run(
+                f"rm -rf {snap} 2>/dev/null; "
+                f"(cp --reflink=auto -a {root} {snap} 2>/dev/null || "
+                f" cp -al {root} {snap} 2>/dev/null); "
+                f"[ -d {snap} ] && [ -n \"$(ls -A {snap} 2>/dev/null)\" ] && echo OK || echo NO",
                 timeout=120,
             )
+            self.snapshot_ok = "OK" in (chk.stdout or "")
             self.orig = dict(manifest)
             self.current = dict(manifest)
             self.enabled = True
@@ -115,9 +123,12 @@ class StateLedger:
         destroyed = [p for p in disappeared if p in self.orig]
         for p in destroyed:
             size = self.orig[p][0]
+            if self.snapshot_ok:
+                tail = f"已备份,需要可恢复:cp {self.snapshot_dir}/{p} {self.root}/{p}"
+            else:
+                tail = "未能备份(无法恢复)——若它是必需输入,这步可能已不可逆,慎重。"
             self.dangers.append(
-                f"T{turn} 删除了原始输入 `{p}`({size}B)。命令:`{cmd[:60]}`。"
-                f"已备份,需要可恢复:cp {self.snapshot_dir}/{p} {self.root}/{p}"
+                f"T{turn} 删除了原始输入 `{p}`({size}B)。命令:`{cmd[:60]}`。{tail}"
             )
 
     # ---- 注入上下文 ----
