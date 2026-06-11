@@ -125,18 +125,35 @@ class TerminalAgent(BaseAgent):
         """兜底：trial 被取消/超时导致 run() 没走完时，从轨迹文件回填统计 +
         生成 ATIF。harbor 在 agent 超时(强杀 run())后仍会调本方法,而 jsonl
         每轮实时落盘——这是被杀 trial 也能交出 trajectory.json 的唯一保证,
-        对登榜至关重要(通过的 trial 必须附 ATIF)。"""
+        对登榜至关重要(通过的 trial 必须附 ATIF)。
+
+        本方法绝不能抛异常:它在 harbor 的 trial 恢复路径里被调用,一旦抛出
+        会顺着 TaskGroup 把整个 job 拖崩(pro 被中途强杀留下半行 jsonl 时就这样
+        炸过)。所以全程包在 try 里,任何子步骤失败只记日志、不外泄。"""
+        try:
+            self._populate_post_run(context)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"populate_context_post_run 兜底失败(已吞,不连累 job): {e}")
+
+    def _populate_post_run(self, context: AgentContext) -> None:
         import json
 
         files = sorted(Path(self.logs_dir).glob("*.jsonl"))
         if not files:
             return
 
-        # 1) 回填统计（run() 正常返回时 context 已非空,跳过）
+        # 1) 回填统计（run() 正常返回时 context 已非空,跳过）。
+        #    逐行容错:进程被中途强杀会留下半行 JSON,坏行直接跳过。
         if context.is_empty():
             end_event = None
             for line in files[-1].read_text().splitlines():
-                event = json.loads(line)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if event.get("event") == "end":
                     end_event = event
             if end_event is not None:
