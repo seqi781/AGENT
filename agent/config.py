@@ -17,18 +17,19 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-# 每百万 token 价格（美元），用于运行结束后估算成本。
-# 数据 2026-06 查询，仅作粗估。
-MODEL_PRICING: dict[str, tuple[float, float]] = {
+# 每百万 token 价格（美元）：(输入全价, 输出价, 输入缓存命中价)。
+# 缓存命中价用于修正成本——命中部分按约 1/7 全价计费(DeepSeek 官方口径,粗估)。
+# 第三项缺省时按全价算(不打折,保守)。数据 2026-06 查询,仅作粗估。
+MODEL_PRICING: dict[str, tuple[float, float, float]] = {
     # DeepSeek 官方 API 模型名（直连，无前缀）
-    "deepseek-v4-flash": (0.098, 0.197),
-    "deepseek-v4-pro": (0.435, 0.870),
+    "deepseek-v4-flash": (0.098, 0.197, 0.014),
+    "deepseek-v4-pro": (0.435, 0.870, 0.061),
     # OpenRouter 中转的模型名（带 provider 前缀），保留以兼容历史运行
-    "deepseek/deepseek-v4-pro": (0.435, 0.870),
-    "deepseek/deepseek-v4-flash": (0.098, 0.197),
-    "openai/gpt-5.4": (2.50, 15.00),
-    "openai/gpt-5.3-codex": (1.75, 14.00),
-    "anthropic/claude-opus-4.8": (5.00, 25.00),
+    "deepseek/deepseek-v4-pro": (0.435, 0.870, 0.061),
+    "deepseek/deepseek-v4-flash": (0.098, 0.197, 0.014),
+    "openai/gpt-5.4": (2.50, 15.00, 0.25),
+    "openai/gpt-5.3-codex": (1.75, 14.00, 0.175),
+    "anthropic/claude-opus-4.8": (5.00, 25.00, 0.50),
 }
 
 
@@ -100,9 +101,15 @@ class AgentConfig:
             )
         return key
 
-    def estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float | None:
-        """按价格表估算成本（美元）；未知模型返回 None。"""
+    def estimate_cost(self, prompt_tokens: int, completion_tokens: int,
+                      cache_hit_tokens: int = 0) -> float | None:
+        """按价格表估算成本（美元）；未知模型返回 None。
+        缓存命中的输入 token 按缓存价计费,其余输入按全价。"""
         if self.model not in MODEL_PRICING:
             return None
-        p_in, p_out = MODEL_PRICING[self.model]
-        return (prompt_tokens * p_in + completion_tokens * p_out) / 1e6
+        price = MODEL_PRICING[self.model]
+        p_in, p_out = price[0], price[1]
+        p_cache = price[2] if len(price) > 2 else p_in
+        hit = max(0, min(cache_hit_tokens, prompt_tokens))  # 防越界
+        miss = prompt_tokens - hit
+        return (miss * p_in + hit * p_cache + completion_tokens * p_out) / 1e6

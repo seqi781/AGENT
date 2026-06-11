@@ -410,10 +410,13 @@ class Agent:
                 break
 
         u = self.llm.usage
-        cost = self.config.estimate_cost(u.prompt_tokens, u.completion_tokens)
+        cost = self.config.estimate_cost(u.prompt_tokens, u.completion_tokens,
+                                         u.cache_hit_tokens)
         traj.log("end", status=status, turns=turn,
                  prompt_tokens=u.prompt_tokens, completion_tokens=u.completion_tokens,
-                 reasoning_tokens=u.reasoning_tokens, cost_usd=cost)
+                 reasoning_tokens=u.reasoning_tokens,
+                 cache_hit_tokens=u.cache_hit_tokens,
+                 cache_hit_rate=round(u.cache_hit_rate, 3), cost_usd=cost)
         traj.close()
         return RunResult(
             status=status, summary=summary, turns=turn,

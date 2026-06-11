@@ -31,11 +31,18 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0  # 思考 token（包含在 completion 里，单独记录便于分析）
+    cache_hit_tokens: int = 0   # 命中缓存的输入 token（DeepSeek 按约 1/10 价计费）
+    cache_miss_tokens: int = 0  # 未命中、按全价计费的输入 token
     requests: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """输入 token 的缓存命中率;无输入时返回 0。"""
+        return self.cache_hit_tokens / self.prompt_tokens if self.prompt_tokens else 0.0
 
     def add(self, raw: Any) -> None:
         """从 API 返回的 usage 对象累加。"""
@@ -47,6 +54,16 @@ class Usage:
         details = getattr(raw, "completion_tokens_details", None)
         if details is not None:
             self.reasoning_tokens += getattr(details, "reasoning_tokens", 0) or 0
+        # DeepSeek 把命中/未命中拆在 usage 顶层;OpenAI 把命中放在
+        # prompt_tokens_details.cached_tokens。两种都兼容。
+        hit = getattr(raw, "prompt_cache_hit_tokens", None)
+        miss = getattr(raw, "prompt_cache_miss_tokens", None)
+        if hit is None:
+            pdet = getattr(raw, "prompt_tokens_details", None)
+            hit = getattr(pdet, "cached_tokens", 0) if pdet is not None else 0
+            miss = (raw.prompt_tokens or 0) - (hit or 0)
+        self.cache_hit_tokens += hit or 0
+        self.cache_miss_tokens += miss or 0
 
 
 @dataclass
