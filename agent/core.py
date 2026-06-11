@@ -58,6 +58,23 @@ NUDGE_CAP_PIVOT = (
     "update_memory (note why the old route failed), then make one tool call to start it."
 )
 
+# 防蒸发阀(v0.6.6):私有思考不随历史回传,轮间即蒸发。模型烧几万 token 想清楚
+# 的设计,只有最后几百 token 正文留下,下一轮遇到关联问题就重推一遍——这是
+# "重复推理损耗"的字面来源。思考特别长而可见正文很短时,把思考尾巴(结论
+# 通常在末尾)注回下一轮上下文,免得重推。
+THINK_TAIL_NOTE = (
+    "[Note: your private reasoning last turn ({rt} tokens) is discarded between turns — "
+    "only visible text, tool results and the memory board survive. Its tail is quoted "
+    "below. Reuse these conclusions (and record load-bearing ones via update_memory) "
+    "instead of re-deriving them:]\n"
+)
+
+# E4 原地打转标注:同一条命令拿到逐字相同的结果时附加的提醒。
+REPEAT_CMD_NOTE = (
+    "\n[!] Identical command already ran at turn {turn} with the IDENTICAL result. "
+    "Repeating it changes nothing — change the code, the inputs or the approach first."
+)
+
 # 首轮规划协议：把"第一轮该想多深"从开放题变成填空题。
 # 病根：扁平循环里首轮自由度最大,推理模型容易在草稿上推演全局直到撞顶。
 # 解法：首轮只要求一份简短的可见计划 + 立刻一个信息收集类工具调用;
@@ -227,6 +244,11 @@ class Agent:
         tool_specs = [t.spec() for t in self.tools]
         nudged = False
         cap_streak = 0
+        # E1: 撞顶后下一次调用关闭思考——上下文里信息都在,关推理逼模型直接把
+        # 结论写出来(实证 disabled 模式 2s 出可用答案 vs 默认 15s 零产出)。
+        force_no_think = False
+        # E4: run_command 去重检测,参数串 -> (轮号, 结果哈希)
+        cmd_seen: dict[str, tuple[int, int]] = {}
         last_board_turn = 0  # 上次成功 update_memory 的轮号,板过期提醒用
         budget_warned = False
         turns_warned = False
@@ -313,8 +335,14 @@ class Agent:
                     break
 
             # ---- 调用 LLM ----
+            # E2: 收尾抢救期(轮数告急/墙钟告急)关闭思考——那时要的是写盘、清理、
+            # task_done 这类机械动作,深思只会再烧几分钟甚至再次撞顶。
+            salvage = turns_warned or remaining_sec() <= self.config.wall_clock_warn_at_sec
+            no_think = force_no_think or salvage
+            force_no_think = False
             try:
-                resp = self.llm.complete(build_context(), tool_specs)
+                resp = self.llm.complete(build_context(), tool_specs,
+                                         thinking_disabled=no_think)
             except LLMError as e:
                 traj.log("llm_error", error=str(e))
                 status = "llm_error"
@@ -330,6 +358,8 @@ class Agent:
                 latency=round(resp.latency, 2),
                 provider=resp.provider,
                 finish_reason=resp.finish_reason,
+                reasoning_tokens=resp.reasoning_tokens,
+                thinking_disabled=no_think,
             )
             self.on_event("assistant", {"turn": turn, "text": resp.text,
                                         "tool_calls": resp.tool_calls,
@@ -348,8 +378,21 @@ class Agent:
                         break
                     # 第 1 次:缩步子;第 2 次起:这条路太重,另辟蹊径
                     nudge_text = NUDGE_REASONING_CAP if cap_streak == 1 else NUDGE_CAP_PIVOT
+                    # E3: 撞顶轮可见产出为零,被截断的思考尾巴是唯一遗产——
+                    # 结论通常在末尾,注回去,抢救轮直接接着结论干,不必重推。
+                    tail = (resp.reasoning_text or "").strip()
+                    tail = tail[-self.config.reasoning_tail_chars:]
+                    if tail:
+                        nudge_text += (
+                            "\n\n[Recovered tail of your truncated private reasoning — "
+                            "use these conclusions directly instead of re-deriving:]\n..."
+                            + tail
+                        )
                     history.append({"role": "user", "content": nudge_text})
-                    traj.log("nudge", kind="reasoning_cap", streak=cap_streak)
+                    # E1: 抢救轮关闭思考,逼模型把已有结论落成行动而不是再想一遍
+                    force_no_think = True
+                    traj.log("nudge", kind="reasoning_cap", streak=cap_streak,
+                             tail_chars=len(tail))
                     continue
                 # 普通"只说话不调工具":提醒一次,再犯终止
                 if nudged:
@@ -366,6 +409,16 @@ class Agent:
             # 而不是整个任务只给一次(长任务中段撞顶很常见)
             nudged = False
             cap_streak = 0
+            # E3 防蒸发阀(常规轮):思考很长而可见正文很短 => 结论大多锁在即将
+            # 蒸发的思考里。截尾巴,等工具结果都追加完后注入(保持 API 消息顺序)。
+            think_note = ""
+            if (resp.reasoning_tokens >= self.config.reasoning_evaporate_min_tokens
+                    and len(resp.text) < 400):
+                tail = (resp.reasoning_text or "").strip()
+                tail = tail[-self.config.reasoning_tail_chars:]
+                if tail:
+                    think_note = (THINK_TAIL_NOTE.format(rt=resp.reasoning_tokens)
+                                  + "..." + tail)
             stopped = False
             for tc in resp.tool_calls:
                 tool = self.tool_map.get(tc["name"])
@@ -374,6 +427,14 @@ class Agent:
                 else:
                     result = tool.execute(tc["arguments"])
                     result_text, is_error = result.output, result.is_error
+                    # E4 原地打转检测:同一条命令拿到逐字相同的结果,重复毫无意义。
+                    # 机械地把这个事实标在结果上,不靠模型自觉翻历史。
+                    if tc["name"] == "run_command":
+                        sig = hash(result_text)
+                        prev = cmd_seen.get(tc["arguments"])
+                        if prev is not None and prev[1] == sig:
+                            result_text += REPEAT_CMD_NOTE.format(turn=prev[0])
+                        cmd_seen[tc["arguments"]] = (turn, sig)
                     if result.stop:
                         stopped = True
                         status = "done"
@@ -403,6 +464,10 @@ class Agent:
                     last_error_output, error_streak = None, 0
             if stopped:
                 break
+            if think_note:
+                history.append({"role": "user", "content": think_note})
+                traj.log("think_tail", turn=turn,
+                         reasoning_tokens=resp.reasoning_tokens)
             if error_streak >= 4:
                 status = "environment_lost"
                 summary = f"连续 {error_streak} 次完全相同的错误，疑似执行环境已失联: {last_error_output[:200]}"

@@ -79,6 +79,13 @@ class AgentConfig:
     # 实证抢救成功率约 2/3,值得多给几次机会(普通"只说话不干活"仍然只提醒一次)。
     max_cap_rescues: int = 3
 
+    # ---- 推理减负(v0.6.6) ----
+    # 私有思考(reasoning_content)不随历史回传,轮间即蒸发,模型常重推一遍。
+    # 防蒸发阀:思考很长而可见正文很短时,把思考尾巴(结论所在)注回下一轮上下文;
+    # 撞顶抢救轮则总是注入(那一轮可见产出为零,思考尾巴是唯一遗产)。
+    reasoning_tail_chars: int = 1600          # 注回的思考尾巴最大字符数
+    reasoning_evaporate_min_tokens: int = 12_000  # 非撞顶轮触发截留的思考 token 门槛
+
     # ---- 运行目录 ----
     workdir: str = "."                  # agent 执行命令的工作目录
     runs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "runs")

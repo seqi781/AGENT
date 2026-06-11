@@ -50,7 +50,7 @@ class TerminalAgent(BaseAgent):
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.6.5"  # 回退无效的尽早落盘规则;转向推理量优化
+        return "0.6.6"  # 推理减负:撞顶关推理重试/收尾快通道/思考尾巴截留/重复命令标注
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互

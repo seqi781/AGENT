@@ -76,6 +76,10 @@ class LLMResponse:
     finish_reason: str | None
     latency: float                   # 本次请求耗时（秒）
     provider: str | None             # OpenRouter 实际路由到的供应商
+    # 本轮私有思考：内容(DeepSeek 的 reasoning_content,可能为空)与 token 数。
+    # 思考不随历史回传、轮间即蒸发——core 用这两个字段做"防蒸发"截留。
+    reasoning_text: str = ""
+    reasoning_tokens: int = 0
 
 
 class LLMError(Exception):
@@ -102,17 +106,29 @@ class OpenAICompatProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        *,
+        thinking_disabled: bool = False,
     ) -> LLMResponse:
-        """发起一次对话补全，带指数退避重试。"""
+        """发起一次对话补全，带指数退避重试。
+
+        thinking_disabled: 关闭本次调用的私有思考。实证 DeepSeek 唯一有效的
+        推理量控制就是这个二元开关(budget/effort 参数全部无效或报错)；
+        仅对 DeepSeek 官方 API 生效,其他后端忽略。用于撞顶抢救轮与收尾抢救期。
+        """
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": [self._sanitize(m) for m in messages],
             "tools": tools,
             "max_tokens": self.config.max_output_tokens,
         }
+        extra: dict[str, Any] = {}
         if self.config.providers:
             # OpenRouter 扩展参数：固定供应商，保证延迟/行为可复现
-            payload["extra_body"] = {"provider": {"only": self.config.providers}}
+            extra["provider"] = {"only": self.config.providers}
+        if thinking_disabled and "deepseek" in self.config.base_url:
+            extra["thinking"] = {"type": "disabled"}
+        if extra:
+            payload["extra_body"] = extra
 
         last_err: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
@@ -162,6 +178,7 @@ class OpenAICompatProvider:
                 }
                 for tc in msg.tool_calls
             ]
+        det = getattr(getattr(resp, "usage", None), "completion_tokens_details", None)
         return LLMResponse(
             message=message,
             tool_calls=tool_calls,
@@ -169,4 +186,6 @@ class OpenAICompatProvider:
             finish_reason=choice.finish_reason,
             latency=latency,
             provider=getattr(resp, "provider", None),
+            reasoning_text=getattr(msg, "reasoning_content", None) or "",
+            reasoning_tokens=(getattr(det, "reasoning_tokens", 0) or 0) if det else 0,
         )
