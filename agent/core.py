@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .config import AgentConfig
@@ -183,6 +183,10 @@ class RunResult:
     usage_prompt: int
     usage_completion: int
     cost_usd: float | None
+    # 完整对话消息（system + 任务 + 全量未裁剪历史）。供适配器导出 ATIF
+    # trajectory.json（登榜要求）。历史里本就保留全程,裁剪只发生在拼上下文时。
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    model: str = ""
 
 
 class Agent:
@@ -415,4 +419,6 @@ class Agent:
             status=status, summary=summary, turns=turn,
             usage_prompt=u.prompt_tokens, usage_completion=u.completion_tokens,
             cost_usd=cost,
+            messages=fixed + history,
+            model=self.config.model,
         )

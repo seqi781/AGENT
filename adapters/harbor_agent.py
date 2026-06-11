@@ -33,7 +33,9 @@ from agent.tools import default_toolset
 class TerminalAgent(BaseAgent):
     """我们自己的 agent 在 Harbor 中的化身。"""
 
-    SUPPORTS_ATIF = False
+    # 产出 ATIF 轨迹（logs_dir/trajectory.json）。登榜完整性政策要求每个
+    # 通过的 trial 附 ATIF。token id/logprobs 我们拿不到,走纯消息形态。
+    SUPPORTS_ATIF = True
 
     def __init__(self, *args, task_timeout_sec: float | None = None, **kwargs) -> None:
         # 接收 --agent-kwargs task_timeout_sec=NNN,透传到 AgentConfig 让墙钟感知生效。
@@ -48,7 +50,7 @@ class TerminalAgent(BaseAgent):
         return "terminal-agent"
 
     def version(self) -> str:
-        return "0.6.2"  # 轮数预算抢救模式 + 指定工具优先规则
+        return "0.6.3"  # ATIF 轨迹 + 轮数抢救 + 指定工具优先
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # 尽力安装 tmux（send_keys 需要）。失败不致命——多数任务用不到交互
@@ -95,6 +97,29 @@ class TerminalAgent(BaseAgent):
             "summary": result.summary,
             "model": config.model,
         }
+
+        # 写 ATIF 轨迹（登榜要求）。失败不该连累跑分结果,故吞掉异常只记日志。
+        try:
+            self._write_atif(result)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"写 ATIF trajectory.json 失败（不影响判分）: {e}")
+
+    def _write_atif(self, result) -> None:
+        from adapters.atif import build_trajectory
+        from harbor.utils.trajectory_utils import format_trajectory_json
+
+        traj = build_trajectory(
+            agent_name=self.name(),
+            agent_version=self.version(),
+            model=result.model,
+            messages=result.messages,
+            prompt_tokens=result.usage_prompt,
+            completion_tokens=result.usage_completion,
+            cost_usd=result.cost_usd,
+            status=result.status,
+        )
+        path = Path(self.logs_dir) / "trajectory.json"
+        path.write_text(format_trajectory_json(traj.to_json_dict()))
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         """兜底：trial 被取消/超时导致 run() 没走完时，从轨迹文件回填统计。"""
