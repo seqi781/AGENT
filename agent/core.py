@@ -151,26 +151,37 @@ def _history_units(history: list[dict]) -> list[list[dict]]:
     return units
 
 
-def _windowed_history(history: list[dict], max_chars: int) -> list[dict]:
-    """返回不超过 max_chars 的近期历史;从最老的单元开始整体丢弃。
-    至少保留最后一个单元。被裁剪时在窗口头部插入 DROPPED_NOTICE +
-    被丢轮次的骨架摘要(命令与结果首行),作为模型没上板时的最低兜底。"""
+# 缓存友好的分块裁剪低水位:超上限时一次裁到这个比例,之后许多轮只追加不裁。
+_HISTORY_EVICT_TO_FRAC = 0.6
+
+
+def _windowed_history(history: list[dict], max_chars: int,
+                      evicted: int = 0) -> tuple[list[dict], int]:
+    """返回(近期历史窗口, 新的已丢弃单元数)。从最老的单元开始整体丢弃,至少留
+    最后一个;裁剪时在窗口头部插入 DROPPED_NOTICE + 被丢轮次的骨架摘要。
+
+    缓存友好的【分块裁剪】:被丢轮次的骨架在窗口最前,每次多丢一轮它就变,使紧跟
+    其后的历史前缀缓存失效。若每轮裁一点(history 永不截断,完整历史一旦超限就每轮
+    都超),长题命中率会塌到 50-65%。这里改成:evicted 由调用方跨轮保存、只增不减;
+    仅当窗口超 max_chars(高水位)才裁,且一次裁到 _HISTORY_EVICT_TO_FRAC 低水位,
+    之后十几轮只追加不裁——骨架稳定、前缀持续命中,裁剪频率从每轮降到十几轮一次。"""
     units = _history_units(history)
+    n = len(units)
     sizes = [sum(len(json.dumps(m, ensure_ascii=False)) for m in u) for u in units]
-    total = sum(sizes)
-    drop = 0
-    while total > max_chars and drop < len(units) - 1:
-        total -= sizes[drop]
-        drop += 1
-    kept = [m for u in units[drop:] for m in u]
-    if drop:
-        digest = [line for u in units[:drop] for line in _unit_digest(u)]
+    evicted = min(max(evicted, 0), n - 1)  # 防越界,至少留最后一个单元
+    if sum(sizes[evicted:]) > max_chars:
+        target = max_chars * _HISTORY_EVICT_TO_FRAC
+        while evicted < n - 1 and sum(sizes[evicted:]) > target:
+            evicted += 1
+    kept = [m for u in units[evicted:] for m in u]
+    if evicted:
+        digest = [line for u in units[:evicted] for line in _unit_digest(u)]
         body = "\n".join(digest)
         if len(body) > _DIGEST_MAX_CHARS:
             body = "(earliest lines omitted)\n" + body[-_DIGEST_MAX_CHARS:]
         notice = DROPPED_NOTICE + ("\n" + body if body else "")
-        return [{"role": "user", "content": notice}] + kept
-    return kept
+        return [{"role": "user", "content": notice}] + kept, evicted
+    return kept, evicted
 
 BUDGET_WARNING = (
     "注意：token 预算即将耗尽。请立刻收尾——用最少的步骤完成或验证当前进度，"
@@ -256,6 +267,7 @@ class Agent:
                  orig_files=len(ledger.orig))
         nudged = False
         cap_streak = 0
+        hist_evicted = 0  # 已丢弃的历史单元数(跨轮保存,只增不减;分块裁剪用)
         # E1: 撞顶后下一次调用关闭思考——上下文里信息都在,关推理逼模型直接把
         # 结论写出来(实证 disabled 模式 2s 出可用答案 vs 默认 15s 零产出)。
         force_no_think = False
@@ -321,7 +333,9 @@ class Agent:
             return {"role": "user", "content": text} if text else None
 
         def build_context() -> list[dict[str, Any]]:
-            window = _windowed_history(history, self.config.max_history_chars)
+            nonlocal hist_evicted
+            window, hist_evicted = _windowed_history(
+                history, self.config.max_history_chars, hist_evicted)
             tail = [m for m in (ledger_message(), board_message()) if m]
             return fixed + window + tail
 
