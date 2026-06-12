@@ -442,7 +442,24 @@ class Agent:
                 if tool is None:
                     result_text, is_error = f"未知工具: {tc['name']}", True
                 else:
-                    result = tool.execute(tc["arguments"])
+                    # 临近截止时把命令超时压到剩余预算内:墙钟只在轮间查,拦不住
+                    # 已经在跑的长命令(dna-assembly 末尾跑 64s 命令冲过 1800s 被 harbor
+                    # 硬杀)。在这里掐,让长命令被【我们的】timeout 优雅终止、返回 tool
+                    # 结果,而不是冲线被杀整个 run。预算大时是 no-op(不干预正常命令)。
+                    exec_args = tc["arguments"]
+                    if tc["name"] == "run_command":
+                        budget = remaining_sec() - self.config.wall_clock_stop_at_sec
+                        try:
+                            a = json.loads(exec_args) if exec_args.strip() else {}
+                        except Exception:
+                            a = {}
+                        requested = float(a.get("timeout") or self.config.command_timeout)
+                        if budget < requested:
+                            a["timeout"] = max(5.0, round(budget, 1))
+                            exec_args = json.dumps(a)
+                            traj.log("cmd_timeout_capped", turn=turn,
+                                     requested=requested, capped=a["timeout"])
+                    result = tool.execute(exec_args)
                     result_text, is_error = result.output, result.is_error
                     # E4 原地打转检测:同一条命令拿到逐字相同的结果,重复毫无意义。
                     # 机械地把这个事实标在结果上,不靠模型自觉翻历史。
