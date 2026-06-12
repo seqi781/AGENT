@@ -1,13 +1,14 @@
 """工具系统：agent 与外部世界交互的唯一通道。
 
-八个工具：
+九个工具：
   - run_command  执行 shell 命令（非交互式，主力工具）
   - read_file    读文件（带行号，支持分页）
   - write_file   写文件（整体覆盖）
   - edit_file    精确字符串替换（str_replace 语义）
   - send_keys    向 tmux 交互式会话输入按键（M2 新增）
   - read_screen  读取 tmux 屏幕快照（M2 新增）
-  - update_memory 维护持久记忆板（M4 新增）
+  - update_memory 维护持久记忆板（M4；P1.5 加增量 add/remove）
+  - recall       检索滚出窗口的历史（P1.3 新增）
   - task_done    宣告任务完成，结束循环
 
 所有工具通过 Executor 抽象执行——本地 subprocess 或 Harbor 容器，
