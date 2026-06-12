@@ -243,6 +243,10 @@ class Agent:
         ]
         history: list[dict[str, Any]] = []
         memory_tool = self.tool_map.get("update_memory")
+        # P1.3 recall:把全量历史(引用)交给检索工具,让模型按需翻回滚出窗口的旧轮次
+        recall_tool = self.tool_map.get("recall")
+        if recall_tool is not None and hasattr(recall_tool, "bind"):
+            recall_tool.bind(history)
         tool_specs = [t.spec() for t in self.tools]
         # 状态账本(P0b):启动快照 + 逐命令文件系统差分,机械捕获副作用。
         # 失败自禁用,绝不拖垮 agent。和记忆板分开:板主观可丢,账本客观不丢。

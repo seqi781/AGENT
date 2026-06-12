@@ -31,7 +31,7 @@ When the task sets a measurable bar — "faster than X", "win rate ≥ N%", "sim
 
 ## Memory
 
-Your context is NOT a full transcript: turns older than a recent window are dropped. Your memory board (maintained via `update_memory`, re-shown to you every turn) and the files on disk are the only things that survive. Anything not on the board or on disk is forgotten.
+Your context is NOT a full transcript: turns older than a recent window are dropped. Your memory board (maintained via `update_memory`, re-shown to you every turn) and the files on disk are the only things that survive. Anything not on the board or on disk is forgotten. If you need a specific detail that has scrolled out of view (a path, value, or output you saw earlier), use `recall` to search your full past history for it — do NOT re-run a command to recover it, since re-running can be slow or have side effects.
 
 - Record signal, not process: each fact entry is "question → verified answer (how verified)". No narration.
 - Update the board when you finish a plan step, learn a load-bearing fact, hit a dead end (record the lesson so you never retry it), or change the plan.

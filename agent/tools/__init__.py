@@ -18,6 +18,7 @@ from ..executor import Executor
 from .base import Tool, ToolResult, truncate
 from .files import EditFileTool, ReadFileTool, WriteFileTool
 from .interactive import ReadScreenTool, SendKeysTool
+from .recall import RecallTool
 from .run_command import RunCommandTool
 from .task_done import TaskDoneTool
 from .update_memory import UpdateMemoryTool
@@ -34,6 +35,7 @@ __all__ = [
     "ReadScreenTool",
     "TaskDoneTool",
     "UpdateMemoryTool",
+    "RecallTool",
     "default_toolset",
 ]
 
@@ -48,5 +50,6 @@ def default_toolset(config, executor: Executor) -> list[Tool]:
         SendKeysTool(config, executor),
         ReadScreenTool(config, executor),
         UpdateMemoryTool(config, executor),
+        RecallTool(config, executor),
         TaskDoneTool(config, executor),
     ]
