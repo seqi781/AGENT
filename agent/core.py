@@ -435,6 +435,8 @@ class Agent:
                     think_note = (THINK_TAIL_NOTE.format(rt=resp.reasoning_tokens)
                                   + "..." + tail)
             stopped = False
+            turn_errors: list[str] = []   # 本轮各工具的错误输出(环境失联按轮判定用)
+            turn_has_ok = False           # 本轮是否有任一工具成功
             for tc in resp.tool_calls:
                 tool = self.tool_map.get(tc["name"])
                 if tool is None:
@@ -480,12 +482,20 @@ class Agent:
                                               "is_error": is_error,
                                               "output": result_text})
                 if is_error:
-                    if result_text == last_error_output:
-                        error_streak += 1
-                    else:
-                        last_error_output, error_streak = result_text, 1
+                    turn_errors.append(result_text)
                 else:
-                    last_error_output, error_streak = None, 0
+                    turn_has_ok = True
+            # 环境失联只看【跨轮】持续同错(容器死了→所有命令同样报错);同一轮内
+            # 批量命令撞同一个琐碎错误(如 4 条命令都 command not found)不算失联——
+            # 那只是缺个工具,下一轮换个命令就好(cobol 曾被这个误杀)。判据:整轮
+            # 全部出错、且与上一全错轮逐字相同,才累加;有任一成功就清零。
+            turn_all_error = bool(turn_errors) and not turn_has_ok
+            if turn_all_error and turn_errors[-1] == last_error_output:
+                error_streak += 1
+            elif turn_all_error:
+                last_error_output, error_streak = turn_errors[-1], 1
+            else:
+                last_error_output, error_streak = None, 0
             if stopped:
                 break
             if think_note:
@@ -494,7 +504,7 @@ class Agent:
                          reasoning_tokens=resp.reasoning_tokens)
             if error_streak >= 4:
                 status = "environment_lost"
-                summary = f"连续 {error_streak} 次完全相同的错误，疑似执行环境已失联: {last_error_output[:200]}"
+                summary = f"连续 {error_streak} 轮整轮同错，疑似执行环境已失联: {last_error_output[:200]}"
                 traj.log("environment_lost", error=last_error_output[:500])
                 break
 
