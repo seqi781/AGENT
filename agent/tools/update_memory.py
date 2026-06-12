@@ -23,46 +23,73 @@ from .base import Tool, ToolResult
 class UpdateMemoryTool(Tool):
     name = "update_memory"
     description = (
-        "Rewrite your persistent memory board. The board is re-shown to you on every turn, "
+        "Maintain your persistent memory board. The board is re-shown to you on every turn, "
         "while older conversation turns are DROPPED from your context — anything not on the "
-        "board is forgotten. Call this whenever you: lock the plan (first turn), learn an "
-        "important verified fact, finish a plan step, hit a dead end worth remembering, or "
-        "discover that an existing entry is wrong (fix it — reality beats memory). "
-        "This REPLACES the whole board: carry forward what is still true, drop what is stale. "
-        "Record facts as 'question -> verified answer (how verified)'. Keep it concise; "
-        "the board has a hard size cap."
+        "board is forgotten. Three ways to update it (you may combine add + remove in one call):\n"
+        "- add: append one new line (a verified fact, a finished step, a lesson). PREFER this for "
+        "incremental updates — it cannot accidentally drop your other notes.\n"
+        "- remove: delete every existing line containing this substring (e.g. mark a step done by "
+        "removing its [todo] line and add-ing a [done] one).\n"
+        "- board: replace the WHOLE board (use only for a full restructure/prune; risky because a "
+        "careless rewrite can silently drop facts).\n"
+        "Record facts as 'question -> verified answer (how verified)'. Keep it concise; hard size cap."
     )
     parameters = {
         "type": "object",
         "properties": {
+            "add": {
+                "type": "string",
+                "description": "A single new line to append (verified fact / done step / lesson).",
+            },
+            "remove": {
+                "type": "string",
+                "description": "Delete every existing board line containing this substring.",
+            },
             "board": {
                 "type": "string",
                 "description": (
-                    "The complete new board. Recommended sections: "
-                    "## Deliverables (locked targets) / ## Plan (steps marked [done]/[doing]/[todo]) / "
-                    "## Verified facts (question -> answer, with how it was verified) / "
+                    "Full replacement board (only for restructure). Recommended sections: "
+                    "## Deliverables / ## Plan (steps [done]/[doing]/[todo]) / "
+                    "## Verified facts (question -> answer, how verified) / "
                     "## Failed attempts & lessons / ## Current step."
                 ),
             },
         },
-        "required": ["board"],
+        "required": [],
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.board: str = ""
 
-    def run(self, board: str) -> ToolResult:
-        limit = self.config.memory_board_limit
-        if len(board) > limit:
+    def run(self, board: str | None = None, add: str | None = None,
+            remove: str | None = None) -> ToolResult:
+        if board is None and add is None and remove is None:
             return ToolResult(
-                f"Board too long ({len(board)} > {limit} chars) — NOT saved. Prune it: "
-                "keep deliverables, plan with status, verified facts and lessons; "
-                "drop narration and stale entries. Then call update_memory again.",
+                "未提供任何更新。给 add(追加一行)、remove(删含某子串的行)、"
+                "或 board(整块重写)中的至少一个。", is_error=True)
+
+        if board is not None:
+            new_board = board  # 整块重写
+        else:
+            # 增量:在现有板上 remove 再 add(都不动其余行,杜绝误删)
+            lines = self.board.splitlines()
+            if remove:
+                lines = [ln for ln in lines if remove not in ln]
+            if add:
+                lines.append(add.rstrip("\n"))
+            new_board = "\n".join(lines)
+
+        limit = self.config.memory_board_limit
+        if len(new_board) > limit:
+            return ToolResult(
+                f"Board would exceed cap ({len(new_board)} > {limit} chars) — NOT saved. "
+                "Prune stale lines (use remove) or restructure with a shorter board.",
                 is_error=True,
             )
-        self.board = board
+        self.board = new_board
+        what = "rewritten" if board is not None else "updated (incremental)"
         return ToolResult(
-            f"Memory board updated ({len(board)} chars). "
+            f"Memory board {what} ({len(new_board)} chars). "
             "It will be shown to you at the end of every turn."
         )
